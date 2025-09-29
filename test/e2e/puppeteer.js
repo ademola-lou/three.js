@@ -183,6 +183,7 @@ const exceptionList = [
 	'webgpu_postprocessing_afterimage',
 	'webgpu_postprocessing_ca',
 	'webgpu_postprocessing_ssgi',
+	'webgpu_postprocessing_meshblend',
 	'webgpu_xr_native_layers',
 	'webgpu_volume_caustics',
 
