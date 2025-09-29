@@ -1,6 +1,8 @@
 import { TempNode, MeshBasicNodeMaterial, RenderTarget, RGBAFormat, NearestFilter, QuadMesh, Vector2 } from 'three/webgpu';
 import { nodeObject, vec4, vec3, float, modelPosition, modelWorldMatrix, passTexture, hash, Fn, wgslFn, NodeUpdateType, texture, screenUV } from 'three/tsl';
 
+//Source: https://www.jacktollenaar.top/mesh-seam-smoothing-blending#h.50wag6hqg9gh
+
 const _size = /*@__PURE__*/ new Vector2();
 
 class MeshBlendNode extends TempNode {
@@ -9,24 +11,18 @@ class MeshBlendNode extends TempNode {
         this.sceneOutputNode = sceneOutputNode;
         this.sceneDepthNode = sceneDepthNode;
         this.updateBeforeType = NodeUpdateType.FRAME;
-        this.renderTarget = new RenderTarget(
-            window.innerWidth * window.devicePixelRatio,
-            window.innerHeight * window.devicePixelRatio,
-            { format: RGBAFormat, count: 1, minFilter: NearestFilter, magFilter: NearestFilter }
-        );
+        this.renderTarget = new RenderTarget(1, 1);
         this.mainCamera = camera;
         this.mainScene = scene;
-        this.factor = float(.1);
+        this.blendFactor = float(1.2);
         this.kernelSize = float(5);
-        this.kernelRadius = float(0.3);   
-        this.depthFalloff = float(0.00001);
-        this.depthThreshold = float(0.5);
+        this.kernelRadius = float(0.01 * this.blendFactor.value);   
+        this.depthFalloff = float(0.0001 * this.blendFactor.value);
         this.debugMaterial = new MeshBasicNodeMaterial();
         this._quadMesh = new QuadMesh(this.debugMaterial);
     }
 
     setup(){
-        console.log("setup mesh blend")
          const CustomHash = wgslFn(`
             fn Hash(p: vec3f) -> f32 {
 
@@ -35,12 +31,8 @@ class MeshBlendNode extends TempNode {
                 return fract(lp.x * lp.y * lp.z * (lp.x + lp.y + lp.z));
             }
         `)
-        this.hashShader = Fn( ( { material, geometry, object } ) => {
-            // const objectPosition = new THREE.Vector3();
-            // object.getWorldPosition(objectPosition);
-            // const pos = vec3().mul(modelPosition);
+        this.hashShader = Fn( () => {
             let p = vec3(modelWorldMatrix.mul(vec3(modelPosition))).toVar();
-
             return vec4(CustomHash(p), 0., 0., 1.);
         });
         this.hashMaterial = new MeshBasicNodeMaterial();
@@ -49,8 +41,7 @@ class MeshBlendNode extends TempNode {
         const uv = screenUV;
         const FinalOutputNode = Fn(()=>{
             const outputPassFunc1 = wgslFn(`
-                fn OutputPassFunc1(sceneColor: vec4<f32>, sceneDepth: vec4<f32>, tex: texture_2d<f32>, sampler: sampler, uv: vec2f, kernelSize: f32, kernelRadius: f32, depthFalloff: f32, depthThreshold: f32) -> vec4<f32> {
-                    var result = sceneColor;
+                fn OutputPassFunc1(sceneDepth: vec4<f32>, tex: texture_2d<f32>, sampler: sampler, uv: vec2f, kernelSize: f32, kernelRadius: f32, depthFalloff: f32) -> vec4<f32> {
                     var seamLocation = vec2<f32>(0., 0.);
                     var minDist = f32(9999999.);
 
@@ -76,7 +67,7 @@ class MeshBlendNode extends TempNode {
             `)
 
             const finalPass = wgslFn(`
-                fn FinalPass(sceneColor: vec3f, mirroredColor: vec3f, seamLocation: vec2f, kernelRadius: f32, sceneDepth: vec4f, otherDepth: vec4f, depthFalloff: f32, minDist: f32, depthThreshold: f32) -> vec3f {
+                fn FinalPass(sceneColor: vec4f, mirroredColor: vec4f, seamLocation: vec2f, kernelRadius: f32, sceneDepth: vec4f, otherDepth: vec4f, depthFalloff: f32, minDist: f32) -> vec4f {
                     
                     let depthDiff = abs(otherDepth.r - sceneDepth.r);
     
@@ -85,26 +76,22 @@ class MeshBlendNode extends TempNode {
                     let depthWeight = saturate(1. -depthDiff / depthFalloff * kernelRadius);
                     var finalWeight = weight * depthWeight;
     
-                    if(sceneDepth.r > sceneDepth.r + depthThreshold){
-                        finalWeight = 0.;
-                    }
                     return mix(sceneColor, mirroredColor, finalWeight);
                 }
             `);
 
             const pass1 = outputPassFunc1(
-                texture(this.sceneOutputNode, uv),
                 texture(this.sceneDepthNode, uv),
                 texture(this.renderTarget.textures[0], uv), 
                 texture(this.sceneOutputNode, uv), 
-                uv, this.kernelSize, this.kernelRadius, this.depthFalloff, this.depthThreshold);
+                uv, this.kernelSize, this.kernelRadius, this.depthFalloff);
 
             const mirroredColor = texture(this.sceneOutputNode, uv.add(pass1.xy.mul(2.)));
             const otherDepth = texture(this.sceneDepthNode, uv.add(pass1.xy.mul(2.)));
 
             const sceneColor = texture(this.sceneOutputNode, uv);
             const sceneDepth = texture(this.sceneDepthNode, uv);
-            return finalPass(sceneColor, mirroredColor, pass1.xy, this.kernelRadius, sceneDepth, otherDepth, this.depthFalloff, pass1.z, this.depthThreshold);
+            return finalPass(sceneColor, mirroredColor, pass1.xy, this.kernelRadius, sceneDepth, otherDepth, this.depthFalloff, pass1.z);
         })();
         return FinalOutputNode;
     }
