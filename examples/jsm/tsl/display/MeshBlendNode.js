@@ -48,11 +48,9 @@ class MeshBlendNode extends TempNode {
 		const FinalOutputNode = Fn( ()=>{
 
 			// sampling helpers (capture outside Fn so they can be used with varying UV offsets)
-			const sampleSceneDepth = ( v ) => texture( this.sceneDepthNode, v );
 			const sampleRT = ( v ) => texture( this.renderTarget.textures[ 0 ], v );
-			const sampleSceneOutput = ( v ) => texture( this.sceneOutputNode, v );
 
-			const outputPassFunc1 = Fn( ( [ sceneDepthNode, rtNode, sceneOutNode, uvNode, kernelSizeNode, kernelRadiusNode, depthFalloffNode ] ) => {
+			const outputPassFunc1 = Fn( ( [ sceneDepthNode, uvNode, kernelSizeNode, kernelRadiusNode ] ) => {
 
 				const sceneDepthVar = sceneDepthNode.toVar();
 
@@ -93,7 +91,7 @@ class MeshBlendNode extends TempNode {
 
 			} );
 
-			const finalPass = Fn( ( [ sceneColor, mirroredColor, seamLocation, kernelRadiusNode, sceneDepth, otherDepth, depthFalloffNode, minDist ] ) => {
+			const finalPass = Fn( ( [ sceneColor, mirroredColor, kernelRadiusNode, sceneDepth, otherDepth, depthFalloffNode, minDist ] ) => {
 
 				const depthDiff = abs( otherDepth.r.sub( sceneDepth.r ) );
 
@@ -108,16 +106,14 @@ class MeshBlendNode extends TempNode {
 
 			const pass1 = outputPassFunc1(
 				texture( this.sceneDepthNode, uv ),
-				texture( this.renderTarget.textures[ 0 ], uv ),
-				texture( this.sceneOutputNode, uv ),
-				uv, this.kernelSize, this.kernelRadius, this.depthFalloff );
+				uv, this.kernelSize, this.kernelRadius );
 
 			const mirroredColor = texture( this.sceneOutputNode, uv.add( pass1.xy.mul( 2. ) ) );
 			const otherDepth = texture( this.sceneDepthNode, uv.add( pass1.xy.mul( 2. ) ) );
 
 			const sceneColor = texture( this.sceneOutputNode, uv );
 			const sceneDepth = texture( this.sceneDepthNode, uv );
-			return finalPass( sceneColor, mirroredColor, pass1.xy, this.kernelRadius, sceneDepth, otherDepth, this.depthFalloff, pass1.z );
+			return finalPass( sceneColor, mirroredColor, this.kernelRadius, sceneDepth, otherDepth, this.depthFalloff, pass1.z );
 
 		} )();
 		return FinalOutputNode;
