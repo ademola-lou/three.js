@@ -179,6 +179,36 @@ class SSGINode extends TempNode {
 		this.backfaceLighting = uniform( 0, 'float' );
 
 		/**
+		 * Optional fallback function for off-screen radiance. Expects a TSL `Fn`
+		 * that accepts a `vec3` world-space position and returns a `vec3` radiance
+		 * color. When set, this is sampled where SSGI rays fail to find on-screen
+		 * geometry (e.g., from a probe grid or environment map).
+		 *
+		 * @type {?Function}
+		 * @default null
+		 */
+		this.fallbackFn = null;
+
+		/**
+		 * Intensity multiplier for the fallback contribution.
+		 * Should be in the range `[0, 10]`.
+		 *
+		 * @type {UniformNode<float>}
+		 * @default 1
+		 */
+		this.fallbackIntensity = uniform( 1, 'float' );
+
+		/**
+		 * Controls how aggressively fallback replaces noisy / low-confidence SSGI.
+		 * Higher values keep SSGI where confidence exists and confine fallback more to misses.
+		 * Should be in the range `[1, 4]`.
+		 *
+		 * @type {UniformNode<float>}
+		 * @default 2
+		 */
+		this.fallbackBlendPower = uniform( 2, 'float' );
+
+		/**
 		 * Whether to use temporal filtering or not. Setting this property to
 		 * `true` requires the usage of `TRAANode`. This will help to reduce noise
 		 * although it introduces typical TAA artifacts like ghosting and temporal
@@ -257,6 +287,14 @@ class SSGINode extends TempNode {
 		 * @type {ReferenceNode<float>}
 		 */
 		this._cameraFar = reference( 'far', 'float', camera );
+
+		/**
+		 * Represents the world matrix of the scene's camera.
+		 *
+		 * @private
+		 * @type {UniformNode<mat4>}
+		 */
+		this._cameraMatrixWorld = uniform( camera.matrixWorld );
 
 		/**
 		 * A reference to the scene's camera.
@@ -586,10 +624,26 @@ class SSGINode extends TempNode {
 			} );
 
 			ao.divAssign( float( ROTATION_COUNT ) );
+
+			const ssgiCoverage = ao.clamp( 0, 1 ).toVar();
+			const ssgiMissRate = ssgiCoverage.oneMinus().toVar();
+
 			ao.assign( pow( ao.clamp().oneMinus(), AO_INTENSITY ).clamp() );
 
 			color.divAssign( float( ROTATION_COUNT ) );
 			color.mulAssign( GI_INTENSITY );
+
+			if ( this.fallbackFn !== null ) {
+
+				const worldPos = this._cameraMatrixWorld.mul( vec4( viewPosition, 1.0 ) ).xyz;
+				const fallbackColor = this.fallbackFn( worldPos ).max( 0 ).mul( this.fallbackIntensity );
+				const ssgiWeight = pow( ssgiCoverage, this.fallbackBlendPower ).clamp( 0, 1 ).toVar();
+				const fallbackWeight = ssgiWeight.oneMinus().toVar();
+
+				// Blend instead of add to avoid energy double counting.
+				color.assign( color.mul( ssgiWeight ).add( fallbackColor.mul( fallbackWeight ) ) );
+
+			}
 
 			// scale color based on luminance
 

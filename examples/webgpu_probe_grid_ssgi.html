@@ -34,7 +34,9 @@
 		<script type="module">
 
 			import * as THREE from 'three/webgpu';
-			import { positionWorld, texture3D, uniform } from 'three/tsl';
+			import { texture3D, uniform, pass, mrt, output, normalView, diffuseColor, velocity, add, vec3, vec4, directionToColor, colorToDirection, sample, Fn } from 'three/tsl';
+			import { ssgi } from 'three/addons/tsl/display/SSGINode.js';
+			import { traa } from 'three/addons/tsl/display/TRAANode.js';
 
 			import { Inspector } from 'three/addons/inspector/Inspector.js';
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -49,9 +51,16 @@
 			let probeBoundsNodeMin;
 			let probeBoundsNodeSize;
 			let probeColorTexture;
+			let renderPipeline;
+			let postProcessOutputType = 0;
+			let scenePassColorNode;
+			let compositePassNode;
+			let giNode;
+			let aoNode;
+			let giPassNode;
+			let traaPassNode;
 
 			const probeHelpers = [];
-			const staticMeshes = [];
 			const clock = new THREE.Clock();
 			const samplePoint = new THREE.Vector3();
 			const sampleNormal = new THREE.Vector3();
@@ -79,7 +88,8 @@
 				scene = new THREE.Scene();
 				scene.background = new THREE.Color( 0xaaaaaa );
 
-				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				// Keep sample count aligned with post-processing depth pipeline.
+				renderer = new THREE.WebGPURenderer();
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
 				renderer.shadowMap.enabled = true;
@@ -95,6 +105,7 @@
 
 				buildSceneGeometry();
 				buildProbeGrid();
+				setupPostProcessing();
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -117,36 +128,132 @@
 
 			}
 
+			function setupPostProcessing() {
+
+				renderPipeline = new THREE.RenderPipeline( renderer );
+
+				const scenePass = pass( scene, camera );
+				scenePass.setMRT( mrt( {
+					output: output,
+					diffuseColor: diffuseColor,
+					normal: directionToColor( normalView ),
+					velocity: velocity
+				} ) );
+
+				scenePassColorNode = scenePass.getTextureNode( 'output' );
+				const scenePassDiffuseNode = scenePass.getTextureNode( 'diffuseColor' ).toInspector( 'Diffuse Color' );
+				const scenePassDepthNode = scenePass.getTextureNode( 'depth' ).toInspector( 'Depth', () => scenePass.getLinearDepthNode() );
+				const scenePassNormalNode = scenePass.getTextureNode( 'normal' ).toInspector( 'Normal' );
+				const scenePassVelocityNode = scenePass.getTextureNode( 'velocity' ).toInspector( 'Velocity' );
+
+				// bandwidth optimization
+				scenePass.getTexture( 'diffuseColor' ).type = THREE.UnsignedByteType;
+				scenePass.getTexture( 'normal' ).type = THREE.UnsignedByteType;
+
+				const sceneNormal = sample( ( uv ) => colorToDirection( scenePassNormalNode.sample( uv ) ) );
+
+				giPassNode = ssgi( scenePassColorNode, scenePassDepthNode, sceneNormal, camera );
+				giPassNode.sliceCount.value = 2;
+				giPassNode.stepCount.value = 8;
+				giPassNode.useTemporalFiltering = false;
+
+				giPassNode.fallbackFn = Fn( ( [ worldPos ] ) => {
+
+					const probeUV = worldPos.sub( probeBoundsNodeMin ).div( probeBoundsNodeSize ).clamp( 0, 1 );
+					return texture3D( probeColorTexture, probeUV ).rgb.mul( 0.2 );
+
+				} );
+				giPassNode.fallbackIntensity.value = 0.6;
+				giPassNode.fallbackBlendPower.value = 2.0;
+
+				giNode = giPassNode.rgb.toInspector( 'SSGI' );
+				aoNode = giPassNode.a.toInspector( 'AO' );
+
+				// Keep direct lighting untouched; add GI on top.
+				compositePassNode = vec4( add( scenePassColorNode.rgb, scenePassDiffuseNode.rgb.mul( giNode.max( 0 ) ) ), scenePassColorNode.a );
+				compositePassNode.name = 'Composite';
+
+				traaPassNode = traa( compositePassNode, scenePassDepthNode, scenePassVelocityNode, camera );
+
+				updatePostprocessing();
+
+				const ssgiGui = renderer.inspector.createParameters( 'SSGI settings' );
+				const outputTypes = { Combined: 0, Direct: 3, AO: 1, GI: 2 };
+				ssgiGui.add( { output: postProcessOutputType }, 'output', outputTypes ).onChange( ( value ) => {
+
+					postProcessOutputType = value;
+					updatePostprocessing();
+
+				} );
+				ssgiGui.add( giPassNode.sliceCount, 'value', 1, 4, 1 ).name( 'slice count' );
+				ssgiGui.add( giPassNode.stepCount, 'value', 1, 32, 1 ).name( 'step count' );
+				ssgiGui.add( giPassNode.radius, 'value', 1, 25 ).name( 'radius' );
+				ssgiGui.add( giPassNode.expFactor, 'value', 1, 3 ).name( 'exp factor' );
+				ssgiGui.add( giPassNode.thickness, 'value', 0.01, 10 ).name( 'thickness' );
+				ssgiGui.add( giPassNode.backfaceLighting, 'value', 0, 1 ).name( 'backface lighting' );
+				ssgiGui.add( giPassNode.aoIntensity, 'value', 0, 4 ).name( 'AO intensity' );
+				ssgiGui.add( giPassNode.giIntensity, 'value', 0, 100 ).name( 'GI intensity' );
+				ssgiGui.add( giPassNode.useLinearThickness, 'value' ).name( 'use linear thickness' );
+				ssgiGui.add( giPassNode.useScreenSpaceSampling, 'value' ).name( 'screen-space sampling' );
+				ssgiGui.add( giPassNode, 'useTemporalFiltering' ).name( 'temporal filtering' ).onChange( updatePostprocessing );
+				ssgiGui.add( giPassNode.fallbackIntensity, 'value', 0, 10 ).name( 'probe fallback' );
+				ssgiGui.add( giPassNode.fallbackBlendPower, 'value', 1, 4 ).name( 'fallback blend' );
+
+			}
+
+			function updatePostprocessing() {
+
+				if ( ! renderPipeline ) return;
+
+				if ( postProcessOutputType === 1 ) {
+
+					renderPipeline.outputNode = vec4( vec3( aoNode ), 1 );
+
+				} else if ( postProcessOutputType === 2 ) {
+
+					renderPipeline.outputNode = vec4( giNode, 1 );
+
+				} else if ( postProcessOutputType === 3 ) {
+
+					renderPipeline.outputNode = scenePassColorNode;
+
+				} else {
+
+					renderPipeline.outputNode = giPassNode.useTemporalFiltering ? traaPassNode : compositePassNode;
+
+				}
+
+				renderPipeline.needsUpdate = true;
+
+			}
+
 			function buildSceneGeometry() {
 
 				const wallGeometry = new THREE.PlaneGeometry( 1, 1 );
 
-				const redWallMaterial = new THREE.MeshStandardNodeMaterial( { color: '#ff0000' } );
+				const redWallMaterial = new THREE.MeshPhysicalMaterial( { color: '#ff0000' } );
 				const leftWall = new THREE.Mesh( wallGeometry, redWallMaterial );
 				leftWall.scale.set( 20, 15, 1 );
 				leftWall.rotation.y = Math.PI * 0.5;
 				leftWall.position.set( - 10, 7.5, 0 );
 				leftWall.receiveShadow = true;
 				scene.add( leftWall );
-				staticMeshes.push( leftWall );
 
-				const greenWallMaterial = new THREE.MeshStandardNodeMaterial( { color: '#00ff00' } );
+				const greenWallMaterial = new THREE.MeshPhysicalMaterial( { color: '#00ff00' } );
 				const rightWall = new THREE.Mesh( wallGeometry, greenWallMaterial );
 				rightWall.scale.set( 20, 15, 1 );
 				rightWall.rotation.y = Math.PI * - 0.5;
 				rightWall.position.set( 10, 7.5, 0 );
 				rightWall.receiveShadow = true;
 				scene.add( rightWall );
-				staticMeshes.push( rightWall );
 
-				const whiteMaterial = new THREE.MeshStandardNodeMaterial( { color: '#ffffff' } );
+				const whiteMaterial = new THREE.MeshPhysicalMaterial( { color: '#ffffff' } );
 
 				const floor = new THREE.Mesh( wallGeometry, whiteMaterial );
 				floor.scale.set( 20, 20, 1 );
 				floor.rotation.x = Math.PI * - 0.5;
 				floor.receiveShadow = true;
 				scene.add( floor );
-				staticMeshes.push( floor );
 
 				const backWall = new THREE.Mesh( wallGeometry, whiteMaterial );
 				backWall.scale.set( 15, 20, 1 );
@@ -154,7 +261,6 @@
 				backWall.position.set( 0, 7.5, - 10 );
 				backWall.receiveShadow = true;
 				scene.add( backWall );
-				staticMeshes.push( backWall );
 
 				const ceiling = new THREE.Mesh( wallGeometry, whiteMaterial );
 				ceiling.scale.set( 20, 20, 1 );
@@ -162,7 +268,6 @@
 				ceiling.position.set( 0, 15, 0 );
 				ceiling.receiveShadow = true;
 				scene.add( ceiling );
-				staticMeshes.push( ceiling );
 
 				const tallBoxGeometry = new THREE.BoxGeometry( 5, 7, 5 );
 				const tallBox = new THREE.Mesh( tallBoxGeometry, whiteMaterial );
@@ -171,7 +276,6 @@
 				tallBox.castShadow = true;
 				tallBox.receiveShadow = true;
 				scene.add( tallBox );
-				staticMeshes.push( tallBox );
 
 				const shortBoxGeometry = new THREE.BoxGeometry( 4, 4, 4 );
 				const shortBox = new THREE.Mesh( shortBoxGeometry, whiteMaterial );
@@ -180,7 +284,6 @@
 				shortBox.castShadow = true;
 				shortBox.receiveShadow = true;
 				scene.add( shortBox );
-				staticMeshes.push( shortBox );
 
 				const pointLight = new THREE.PointLight( '#ffffff', 100 );
 				pointLight.position.set( 0, 13, 0 );
@@ -217,22 +320,15 @@
 
 				probeGrid = new ProbeGrid( bounds, GRID_DIVISIONS );
 				populateProbeGrid( probeGrid );
-				applyProbeGIToStaticMeshes();
 
-				scene.add( new THREE.Box3Helper( bounds, 0x555555 ) );
+				probeBoundsNodeMin = uniform( bounds.min.clone() );
+				probeBoundsNodeSize = uniform( bounds.getSize( new THREE.Vector3() ) );
+				probeColorTexture = createProbeColorTexture( probeGrid );
 
-				probeGrid.forEachProbe( ( probe ) => {
-
-					const helper = new LightProbeHelper( probe, 0.28 );
-					helper.visible = API.showProbeHelpers;
-					probeHelpers.push( helper );
-					scene.add( helper );
-
-				} );
+				// Helpers are intentionally skipped in the MRT scene pass to avoid G-buffer incompatibilities.
 
 				sampledProbe = new THREE.LightProbe();
 				scene.add( sampledProbe );
-				scene.add( new LightProbeHelper( sampledProbe, 0.6 ) );
 
 				updateSampledProbe();
 
@@ -301,41 +397,18 @@
 
 				} );
 
-				const texture3D = new THREE.Data3DTexture( data, sx, sy, sz );
-				texture3D.type = THREE.FloatType;
-				texture3D.format = THREE.RGBAFormat;
-				texture3D.minFilter = THREE.LinearFilter;
-				texture3D.magFilter = THREE.LinearFilter;
-				texture3D.wrapS = THREE.ClampToEdgeWrapping;
-				texture3D.wrapT = THREE.ClampToEdgeWrapping;
-				texture3D.wrapR = THREE.ClampToEdgeWrapping;
-				texture3D.generateMipmaps = false;
-				texture3D.needsUpdate = true;
+				const texture = new THREE.Data3DTexture( data, sx, sy, sz );
+				texture.type = THREE.FloatType;
+				texture.format = THREE.RGBAFormat;
+				texture.minFilter = THREE.LinearFilter;
+				texture.magFilter = THREE.LinearFilter;
+				texture.wrapS = THREE.ClampToEdgeWrapping;
+				texture.wrapT = THREE.ClampToEdgeWrapping;
+				texture.wrapR = THREE.ClampToEdgeWrapping;
+				texture.generateMipmaps = false;
+				texture.needsUpdate = true;
 
-				return texture3D;
-
-			}
-
-			function applyProbeGIToStaticMeshes() {
-
-				probeColorTexture = createProbeColorTexture( probeGrid );
-
-				const probeBoundsSize = probeGrid.bounds.getSize( new THREE.Vector3() );
-				probeBoundsNodeMin = uniform( probeGrid.bounds.min.clone() );
-				probeBoundsNodeSize = uniform( probeBoundsSize );
-
-				const probeUV = positionWorld
-					.sub( probeBoundsNodeMin )
-					.div( probeBoundsNodeSize )
-					.clamp( 0, 1 );
-
-				const probeGI = texture3D( probeColorTexture, probeUV ).rgb.mul( 0.8 );
-
-				for ( let i = 0; i < staticMeshes.length; i ++ ) {
-
-					staticMeshes[ i ].material.emissiveNode = probeGI;
-
-				}
+				return texture;
 
 			}
 
@@ -381,7 +454,7 @@
 				}
 
 				updateSampledProbe();
-				renderer.render( scene, camera );
+				renderPipeline.render();
 
 			}
 
