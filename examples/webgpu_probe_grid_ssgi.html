@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - probe grid (SSGI scene)</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="example.css">
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
+
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Probe Grid (SSGI Scene)</span>
+			</div>
+
+			<small>
+				Probe grid interpolation tested on the Cornell-style SSGI scene setup.
+			</small>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+			import { positionWorld, texture3D, uniform } from 'three/tsl';
+
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { LightProbeHelper } from 'three/addons/helpers/LightProbeHelperGPU.js';
+			import { ProbeGrid } from 'three/addons/lights/ProbeGrid.js';
+
+			let renderer, scene, camera;
+			let controls;
+			let probeGrid;
+			let sampledProbe;
+			let movingMesh;
+			let probeBoundsNodeMin;
+			let probeBoundsNodeSize;
+			let probeColorTexture;
+
+			const probeHelpers = [];
+			const staticMeshes = [];
+			const clock = new THREE.Clock();
+			const samplePoint = new THREE.Vector3();
+			const sampleNormal = new THREE.Vector3();
+			const sampleViewDirection = new THREE.Vector3();
+
+			const GRID_DIVISIONS = new THREE.Vector3( 6, 5, 6 );
+
+			const API = {
+				animate: true,
+				speed: 0.25,
+				showProbeHelpers: true,
+				useGeometricWeighting: true,
+				geometricPower: 2,
+				normalBias: 0.25,
+				viewBias: 0.15
+			};
+
+			init();
+
+			function init() {
+
+				camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 0.1, 100 );
+				camera.position.set( 0, 10, 30 );
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0xaaaaaa );
+
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				renderer.inspector = new Inspector();
+				document.body.appendChild( renderer.domElement );
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 7, 0 );
+				controls.enablePan = true;
+				controls.minDistance = 1;
+				controls.maxDistance = 100;
+				controls.update();
+
+				buildSceneGeometry();
+				buildProbeGrid();
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				const gui = renderer.inspector.createParameters( 'Probe Grid' );
+				gui.add( API, 'animate' );
+				gui.add( API, 'speed', 0.05, 1, 0.01 );
+				gui.add( API, 'showProbeHelpers' ).onChange( () => {
+
+					for ( let i = 0; i < probeHelpers.length; i ++ ) {
+
+						probeHelpers[ i ].visible = API.showProbeHelpers;
+
+					}
+
+				} );
+				gui.add( API, 'useGeometricWeighting' );
+				gui.add( API, 'geometricPower', 0.5, 8, 0.5 );
+				gui.add( API, 'normalBias', 0, 1, 0.01 );
+				gui.add( API, 'viewBias', 0, 1, 0.01 );
+
+			}
+
+			function buildSceneGeometry() {
+
+				const wallGeometry = new THREE.PlaneGeometry( 1, 1 );
+
+				const redWallMaterial = new THREE.MeshStandardNodeMaterial( { color: '#ff0000' } );
+				const leftWall = new THREE.Mesh( wallGeometry, redWallMaterial );
+				leftWall.scale.set( 20, 15, 1 );
+				leftWall.rotation.y = Math.PI * 0.5;
+				leftWall.position.set( - 10, 7.5, 0 );
+				leftWall.receiveShadow = true;
+				scene.add( leftWall );
+				staticMeshes.push( leftWall );
+
+				const greenWallMaterial = new THREE.MeshStandardNodeMaterial( { color: '#00ff00' } );
+				const rightWall = new THREE.Mesh( wallGeometry, greenWallMaterial );
+				rightWall.scale.set( 20, 15, 1 );
+				rightWall.rotation.y = Math.PI * - 0.5;
+				rightWall.position.set( 10, 7.5, 0 );
+				rightWall.receiveShadow = true;
+				scene.add( rightWall );
+				staticMeshes.push( rightWall );
+
+				const whiteMaterial = new THREE.MeshStandardNodeMaterial( { color: '#ffffff' } );
+
+				const floor = new THREE.Mesh( wallGeometry, whiteMaterial );
+				floor.scale.set( 20, 20, 1 );
+				floor.rotation.x = Math.PI * - 0.5;
+				floor.receiveShadow = true;
+				scene.add( floor );
+				staticMeshes.push( floor );
+
+				const backWall = new THREE.Mesh( wallGeometry, whiteMaterial );
+				backWall.scale.set( 15, 20, 1 );
+				backWall.rotation.z = Math.PI * - 0.5;
+				backWall.position.set( 0, 7.5, - 10 );
+				backWall.receiveShadow = true;
+				scene.add( backWall );
+				staticMeshes.push( backWall );
+
+				const ceiling = new THREE.Mesh( wallGeometry, whiteMaterial );
+				ceiling.scale.set( 20, 20, 1 );
+				ceiling.rotation.x = Math.PI * 0.5;
+				ceiling.position.set( 0, 15, 0 );
+				ceiling.receiveShadow = true;
+				scene.add( ceiling );
+				staticMeshes.push( ceiling );
+
+				const tallBoxGeometry = new THREE.BoxGeometry( 5, 7, 5 );
+				const tallBox = new THREE.Mesh( tallBoxGeometry, whiteMaterial );
+				tallBox.rotation.y = Math.PI * 0.25;
+				tallBox.position.set( - 3, 3.5, - 2 );
+				tallBox.castShadow = true;
+				tallBox.receiveShadow = true;
+				scene.add( tallBox );
+				staticMeshes.push( tallBox );
+
+				const shortBoxGeometry = new THREE.BoxGeometry( 4, 4, 4 );
+				const shortBox = new THREE.Mesh( shortBoxGeometry, whiteMaterial );
+				shortBox.rotation.y = Math.PI * - 0.1;
+				shortBox.position.set( 4, 2, 4 );
+				shortBox.castShadow = true;
+				shortBox.receiveShadow = true;
+				scene.add( shortBox );
+				staticMeshes.push( shortBox );
+
+				const pointLight = new THREE.PointLight( '#ffffff', 100 );
+				pointLight.position.set( 0, 13, 0 );
+				pointLight.distance = 100;
+				pointLight.castShadow = true;
+				pointLight.shadow.mapSize.width = 1024;
+				pointLight.shadow.mapSize.height = 1024;
+				scene.add( pointLight );
+
+				const ambientLight = new THREE.AmbientLight( '#0c0c0c' );
+				scene.add( ambientLight );
+
+				// Moving test object lit by sampled probe.
+				movingMesh = new THREE.Mesh(
+					new THREE.SphereGeometry( 1, 48, 24 ),
+					new THREE.MeshStandardMaterial( {
+						color: 0xffffff,
+						roughness: 0.35,
+						metalness: 0.05
+					} )
+				);
+				movingMesh.castShadow = true;
+				movingMesh.position.set( 0, 1.2, 0 );
+				scene.add( movingMesh );
+
+			}
+
+			function buildProbeGrid() {
+
+				const bounds = new THREE.Box3(
+					new THREE.Vector3( - 9, 1, - 9 ),
+					new THREE.Vector3( 9, 14, 9 )
+				);
+
+				probeGrid = new ProbeGrid( bounds, GRID_DIVISIONS );
+				populateProbeGrid( probeGrid );
+				applyProbeGIToStaticMeshes();
+
+				scene.add( new THREE.Box3Helper( bounds, 0x555555 ) );
+
+				probeGrid.forEachProbe( ( probe ) => {
+
+					const helper = new LightProbeHelper( probe, 0.28 );
+					helper.visible = API.showProbeHelpers;
+					probeHelpers.push( helper );
+					scene.add( helper );
+
+				} );
+
+				sampledProbe = new THREE.LightProbe();
+				scene.add( sampledProbe );
+				scene.add( new LightProbeHelper( sampledProbe, 0.6 ) );
+
+				updateSampledProbe();
+
+			}
+
+			function populateProbeGrid( grid ) {
+
+				const leftColor = new THREE.Color( 1, 0.05, 0.05 );
+				const rightColor = new THREE.Color( 0.05, 1, 0.05 );
+				const whiteBounce = new THREE.Color( 1, 1, 1 );
+				const sideColor = new THREE.Color();
+				const finalColor = new THREE.Color();
+
+				const sx = grid.divisions.x;
+				const sy = grid.divisions.y;
+
+				grid.forEachProbe( ( probe, position, _index, x, y ) => {
+
+					probe.position.copy( position );
+
+					const nx = sx === 1 ? 0.5 : x / ( sx - 1 );
+					const ny = sy === 1 ? 0.5 : y / ( sy - 1 );
+
+					sideColor.copy( leftColor ).lerp( rightColor, nx );
+
+					// Blend in white bounce from floor/ceiling and boost upper probes slightly.
+					finalColor.copy( sideColor ).lerp( whiteBounce, 0.3 + 0.25 * Math.abs( ny - 0.5 ) );
+					finalColor.multiplyScalar( THREE.MathUtils.lerp( 0.7, 1.2, ny ) );
+
+					applyConstantIrradiance( probe, finalColor );
+
+				} );
+
+			}
+
+			function applyConstantIrradiance( probe, color ) {
+
+				for ( let i = 0; i < 9; i ++ ) {
+
+					probe.sh.coefficients[ i ].set( 0, 0, 0 );
+
+				}
+
+				probe.sh.coefficients[ 0 ].set( color.r, color.g, color.b ).multiplyScalar( 0.9 );
+				probe.intensity = 1;
+
+			}
+
+			function createProbeColorTexture( grid ) {
+
+				const sx = grid.divisions.x;
+				const sy = grid.divisions.y;
+				const sz = grid.divisions.z;
+				const data = new Float32Array( sx * sy * sz * 4 );
+
+				let texelOffset = 0;
+
+				grid.forEachProbe( ( probe ) => {
+
+					const c = probe.sh.coefficients[ 0 ];
+					data[ texelOffset + 0 ] = c.x;
+					data[ texelOffset + 1 ] = c.y;
+					data[ texelOffset + 2 ] = c.z;
+					data[ texelOffset + 3 ] = 1;
+					texelOffset += 4;
+
+				} );
+
+				const texture3D = new THREE.Data3DTexture( data, sx, sy, sz );
+				texture3D.type = THREE.FloatType;
+				texture3D.format = THREE.RGBAFormat;
+				texture3D.minFilter = THREE.LinearFilter;
+				texture3D.magFilter = THREE.LinearFilter;
+				texture3D.wrapS = THREE.ClampToEdgeWrapping;
+				texture3D.wrapT = THREE.ClampToEdgeWrapping;
+				texture3D.wrapR = THREE.ClampToEdgeWrapping;
+				texture3D.generateMipmaps = false;
+				texture3D.needsUpdate = true;
+
+				return texture3D;
+
+			}
+
+			function applyProbeGIToStaticMeshes() {
+
+				probeColorTexture = createProbeColorTexture( probeGrid );
+
+				const probeBoundsSize = probeGrid.bounds.getSize( new THREE.Vector3() );
+				probeBoundsNodeMin = uniform( probeGrid.bounds.min.clone() );
+				probeBoundsNodeSize = uniform( probeBoundsSize );
+
+				const probeUV = positionWorld
+					.sub( probeBoundsNodeMin )
+					.div( probeBoundsNodeSize )
+					.clamp( 0, 1 );
+
+				const probeGI = texture3D( probeColorTexture, probeUV ).rgb.mul( 0.8 );
+
+				for ( let i = 0; i < staticMeshes.length; i ++ ) {
+
+					staticMeshes[ i ].material.emissiveNode = probeGI;
+
+				}
+
+			}
+
+			function updateSampledProbe() {
+
+				sampleNormal.subVectors( camera.position, movingMesh.position ).normalize();
+				samplePoint.copy( movingMesh.position ).addScaledVector( sampleNormal, 1.0 );
+				sampleViewDirection.subVectors( camera.position, samplePoint ).normalize();
+
+				probeGrid.sample( samplePoint, sampledProbe, {
+					normal: sampleNormal,
+					viewDirection: sampleViewDirection,
+					normalBias: API.normalBias,
+					viewBias: API.viewBias,
+					geometricWeighting: API.useGeometricWeighting,
+					geometricPower: API.geometricPower
+				} );
+
+			}
+
+			function onWindowResize() {
+
+				const width = window.innerWidth;
+				const height = window.innerHeight;
+
+				camera.aspect = width / height;
+				camera.updateProjectionMatrix();
+				renderer.setSize( width, height );
+
+			}
+
+			function animate() {
+
+				controls.update();
+
+				if ( API.animate === true ) {
+
+					const t = clock.getElapsedTime() * API.speed;
+					movingMesh.position.x = Math.sin( t * 0.8 ) * 6;
+					movingMesh.position.y = 1.1 + Math.sin( t * 1.9 ) * 0.4;
+					movingMesh.position.z = Math.cos( t * 0.6 ) * 6;
+
+				}
+
+				updateSampledProbe();
+				renderer.render( scene, camera );
+
+			}
+
+		</script>
+
+	</body>
+</html>
