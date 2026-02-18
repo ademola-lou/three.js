@@ -328,9 +328,9 @@
 				// Helpers are intentionally skipped in the MRT scene pass to avoid G-buffer incompatibilities.
 
 				sampledProbe = new THREE.LightProbe();
-				scene.add( sampledProbe );
-
-				updateSampledProbe();
+				// NOTE: Keep disabled to avoid global probe lighting tied to moving mesh sampling.
+				// scene.add( sampledProbe );
+				// updateSampledProbe();
 
 			}
 
@@ -453,7 +453,8 @@
 
 				}
 
-				updateSampledProbe();
+				// NOTE: Keep disabled to avoid making scene GI follow `movingMesh`.
+				// updateSampledProbe();
 				renderPipeline.render();
 
 			}
