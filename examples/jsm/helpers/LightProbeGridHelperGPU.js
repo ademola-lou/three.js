@@ -78,6 +78,8 @@ class LightProbeGridHelper extends InstancedMesh {
 
 		this.instanceMatrix.needsUpdate = true;
 		this.geometry.setAttribute( 'instanceUVW', new InstancedBufferAttribute( uvwArray, 3 ) );
+		this.computeBoundingSphere();
+		this.updateMatrixWorld( true );
 
 		this.material.colorNode = samplePackedLightProbeGridIrradiance( probes, attribute( 'instanceUVW', 'vec3' ), normalWorld.normalize() );
 		this.material.needsUpdate = true;

@@ -1,10 +1,8 @@
-import { LightingNode } from 'three/webgpu';
+import { Data3DTexture, HalfFloatType, LightingNode, LinearFilter, RGBAFormat } from 'three/webgpu';
 import { float, normalWorld, positionWorld, texture3D, uniform, vec3 } from 'three/tsl';
 
-import { Data3DTexture, FloatType, LinearFilter, RGBAFormat } from 'three';
-
-const _emptyProbeTexture = /*@__PURE__*/ new Data3DTexture( new Float32Array( 4 ), 1, 1, 1 );
-_emptyProbeTexture.type = FloatType;
+const _emptyProbeTexture = /*@__PURE__*/ new Data3DTexture( new Uint16Array( 4 ), 1, 1, 1 );
+_emptyProbeTexture.type = HalfFloatType;
 _emptyProbeTexture.format = RGBAFormat;
 _emptyProbeTexture.minFilter = LinearFilter;
 _emptyProbeTexture.magFilter = LinearFilter;
@@ -72,19 +70,36 @@ function sampleLightProbeGridIrradiance( probes, samplePosition, sampleNormal ) 
 	const resMinusOne = probesResolution.sub( 1 );
 	const probeSpacing = gridRange.div( resMinusOne );
 
+	// Bias the sample a half-spacing into the volume along the normal. This is what
+	// gets used for the actual SH lookup.
 	const offsetPosition = samplePosition.add( sampleNormal.mul( probeSpacing ).mul( 0.5 ) );
 	const localUVW = offsetPosition.sub( probesMin ).div( gridRange );
 
-	const inside = samplePosition.x.greaterThanEqual( probesMin.x )
-		.and( samplePosition.x.lessThanEqual( probesMax.x ) )
-		.and( samplePosition.y.greaterThanEqual( probesMin.y ) )
-		.and( samplePosition.y.lessThanEqual( probesMax.y ) )
-		.and( samplePosition.z.greaterThanEqual( probesMin.z ) )
-		.and( samplePosition.z.lessThanEqual( probesMax.z ) );
+	// Inflate the volume's bounding box by a small padding on every axis so that
+	// wall / floor / ceiling / corner fragments that sit just outside the volume on
+	// one or more axes are still claimed by this grid. Without this, surfaces like
+	// the bottom edge of a divider wall (whose Y is below `probesMin.y` and whose
+	// normal-along offset only moves X) fall outside on Y and render black.
+	//
+	// `probes.boundaryPadding` lets the user tune this per-grid. The default is
+	// small enough to cover typical wall-volume gaps without producing an obvious
+	// double-bright strip where two adjacent grids share a boundary.
+	const padding = uniform( probes.boundaryPadding !== undefined ? probes.boundaryPadding : 0.25 );
+	const paddedMin = probesMin.sub( padding );
+	const paddedMax = probesMax.add( padding );
+
+	const inside = samplePosition.x.greaterThanEqual( paddedMin.x )
+		.and( samplePosition.x.lessThan( paddedMax.x ) )
+		.and( samplePosition.y.greaterThanEqual( paddedMin.y ) )
+		.and( samplePosition.y.lessThan( paddedMax.y ) )
+		.and( samplePosition.z.greaterThanEqual( paddedMin.z ) )
+		.and( samplePosition.z.lessThan( paddedMax.z ) );
 
 	const uvw = localUVW.clamp( 0, 1 ).mul( resMinusOne ).div( probesResolution ).add( float( 0.5 ).div( probesResolution ) );
 
-	return inside.select( samplePackedLightProbeGridIrradiance( probes, uvw, sampleNormal ), vec3( 0 ) );
+	const irradiance = samplePackedLightProbeGridIrradiance( probes, uvw, sampleNormal );
+
+	return inside.select( irradiance, vec3( 0 ) );
 
 }
 

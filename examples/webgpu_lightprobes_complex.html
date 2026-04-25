@@ -17,6 +17,7 @@
 
 			<small>
 				Two rooms with independent light probe volumes in WebGPU. Bake time scales with probe resolution.
+				GLB upload: use <strong>GLTF → Load</strong> (self-contained <code>.glb</code> recommended; separate <code>.gltf</code> + <code>.bin</code> often will not load from disk). Rebake or change resolution to refresh GI.
 			</small>
 		</div>
 
@@ -37,15 +38,19 @@
 			import { lights } from 'three/tsl';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { TransformControls } from 'three/addons/controls/TransformControls.js';
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPU.js';
 			import { LightProbeGridNode } from 'three/addons/lighting/LightProbeGridNode.js';
 			import { LightProbeGridHelper } from 'three/addons/helpers/LightProbeGridHelperGPU.js';
+			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-			let camera, scene, renderer, controls;
+			let camera, scene, renderer, controls, transformControls;
 			let probesLeft, probesRight;
 			let probesHelperLeft, probesHelperRight;
 			let gui;
+			let uploadedModel = null;
+			const uploadedModelMaterials = [];
 
 			const probeMaterials = [];
 
@@ -95,7 +100,7 @@
 				const whiteMat = createMaterial( { color: 0xeeeeee } );
 				const dividerMat = createMaterial( { color: 0xcccccc } );
 				const redMat = createMaterial( { color: 0xdd2200 } );
-				const blueMat = createMaterial( { color: 0x0044ff } );
+				const blueMat = createMaterial( { color: new THREE.Color("blue").multiplyScalar(5) } );
 				const woodMat = createMaterial( { color: 0x886644 } );
 				const goldMat = createMaterial( { color: 0xffd700, metalness: 0.3, roughness: 0.4 } );
 				const pinkMat = createMaterial( { color: 0xff44aa, metalness: 0.2, roughness: 0.5 } );
@@ -243,6 +248,15 @@
 				controls.target.set( 0, 2.5, 0 );
 				controls.update();
 
+				transformControls = new TransformControls( camera, renderer.domElement );
+				transformControls.addEventListener( 'dragging-changed', ( event ) => {
+
+					controls.enabled = ! event.value;
+
+				} );
+				transformControls.attach( sphere );
+				scene.add( transformControls.getHelper() );
+
 				function updateLightsNode() {
 
 					const activeLights = [ ...lightSources ];
@@ -266,44 +280,295 @@
 
 				async function bakeWithResolution( resolution ) {
 
+					const startTime = performance.now();
+					console.log( `LightProbeGridGPU: baking ${ resolution }x${ resolution }x${ resolution } probe volumes...` );
+
 					if ( probesHelperLeft ) {
 
-						scene.remove( probesHelperLeft );
-						probesHelperLeft.dispose();
-						probesHelperLeft = null;
+						probesHelperLeft.visible = false;
 
 					}
 
 					if ( probesHelperRight ) {
 
-						scene.remove( probesHelperRight );
-						probesHelperRight.dispose();
-						probesHelperRight = null;
+						probesHelperRight.visible = false;
 
 					}
 
-					if ( probesLeft ) probesLeft.dispose();
-					if ( probesRight ) probesRight.dispose();
+					if ( probesLeft ) {
 
-					probesLeft = new LightProbeGridGPU( 7.8, 4.7, 7.6, resolution, resolution, resolution );
-					probesLeft.position.set( - 3.9, 2.45, 0 );
-					await probesLeft.bake( renderer, scene, { cubemapSize: 16, near: 0.05, far: 20 } );
+						probesLeft.dispose();
+						probesLeft = null;
 
-					probesRight = new LightProbeGridGPU( 7.8, 4.7, 7.6, resolution, resolution, resolution );
-					probesRight.position.set( 3.9, 2.45, 0 );
-					await probesRight.bake( renderer, scene, { cubemapSize: 16, near: 0.05, far: 20 } );
+					}
+
+					if ( probesRight ) {
+
+						probesRight.dispose();
+						probesRight = null;
+
+					}
 
 					updateLightsNode();
 
-					probesHelperLeft = new LightProbeGridHelper( probesLeft );
-					probesHelperLeft.visible = params.showProbes;
-					scene.add( probesHelperLeft );
+					probesLeft = new LightProbeGridGPU( 7.8, 4.7, 7.6, resolution, resolution, resolution );
+					probesLeft.position.set( - 3.9, 2.45, 0 );
+					await probesLeft.bake( renderer, scene, { cubemapSize: 32, near: 0.05, far: 20 } );
 
-					probesHelperRight = new LightProbeGridHelper( probesRight );
+					probesRight = new LightProbeGridGPU( 7.8, 4.7, 7.6, resolution, resolution, resolution );
+					probesRight.position.set( 3.9, 2.45, 0 );
+					await probesRight.bake( renderer, scene, { cubemapSize: 32, near: 0.05, far: 20 } );
+
+					updateLightsNode();
+
+					if ( probesHelperLeft === undefined || probesHelperLeft === null ) {
+
+						probesHelperLeft = new LightProbeGridHelper( probesLeft );
+						scene.add( probesHelperLeft );
+
+					} else {
+
+						probesHelperLeft.probes = probesLeft;
+						probesHelperLeft.update();
+
+					}
+
+					probesHelperLeft.visible = params.showProbes;
+
+					if ( probesHelperRight === undefined || probesHelperRight === null ) {
+
+						probesHelperRight = new LightProbeGridHelper( probesRight );
+						scene.add( probesHelperRight );
+
+					} else {
+
+						probesHelperRight.probes = probesRight;
+						probesHelperRight.update();
+
+					}
+
 					probesHelperRight.visible = params.showProbes;
-					scene.add( probesHelperRight );
+
+					renderer.setSize( window.innerWidth, window.innerHeight, false );
+					renderer.render( scene, camera );
+
+					console.log( `LightProbeGridGPU: bake complete in ${ ( performance.now() - startTime ).toFixed( 1 ) } ms.` );
 
 				}
+
+				const gltfLoader = new GLTFLoader();
+
+				function registerUploadedMaterial( material ) {
+
+					if ( ! probeMaterials.includes( material ) ) {
+
+						probeMaterials.push( material );
+						uploadedModelMaterials.push( material );
+
+					} else if ( ! uploadedModelMaterials.includes( material ) ) {
+
+						uploadedModelMaterials.push( material );
+
+					}
+
+				}
+
+				function standardMaterialToNode( source ) {
+
+					if ( ! source ) return new THREE.MeshStandardNodeMaterial( { color: 0x888888 } );
+					if ( source.isMeshStandardNodeMaterial || source.isMeshPhysicalNodeMaterial ) {
+
+						registerUploadedMaterial( source );
+						return source;
+
+					}
+
+					if ( ! ( source.isMeshStandardMaterial || source.isMeshPhysicalMaterial ) ) {
+
+						const fallback = new THREE.MeshStandardNodeMaterial( { color: 0xaaaaaa, metalness: 0.5, roughness: 0.5 } );
+						source.dispose();
+						registerUploadedMaterial( fallback );
+						return fallback;
+
+					}
+
+					const m = source.isMeshPhysicalMaterial
+						? new THREE.MeshPhysicalNodeMaterial()
+						: new THREE.MeshStandardNodeMaterial();
+					m.name = source.name;
+					m.map = source.map;
+					m.lightMap = source.lightMap;
+					if ( source.normalMap ) {
+
+						m.normalMap = source.normalMap;
+						m.normalScale.copy( source.normalScale );
+
+					}
+
+					m.roughnessMap = source.roughnessMap;
+					m.metalnessMap = source.metalnessMap;
+					if ( source.aoMap ) {
+
+						m.aoMap = source.aoMap;
+						m.aoMapIntensity = source.aoMapIntensity;
+
+					}
+
+					m.emissiveMap = source.emissiveMap;
+					m.emissive.copy( source.emissive );
+					m.color.copy( source.color );
+					m.metalness = source.metalness;
+					m.roughness = source.roughness;
+					if ( m.isMeshPhysicalNodeMaterial && source.isMeshPhysicalMaterial ) {
+
+						m.clearcoat = source.clearcoat;
+						m.clearcoatRoughness = source.clearcoatRoughness;
+						m.clearcoatMap = source.clearcoatMap;
+						m.transmission = source.transmission;
+						m.thickness = source.thickness;
+						m.attenuationDistance = source.attenuationDistance;
+						if ( source.attenuationColor ) m.attenuationColor.copy( source.attenuationColor );
+						m.ior = source.ior;
+
+					}
+
+					m.transparent = source.transparent;
+					m.opacity = source.opacity;
+					m.alphaMap = source.alphaMap;
+					m.side = source.side;
+					m.vertexColors = source.vertexColors;
+					m.envMap = source.envMap;
+					m.envMapIntensity = source.envMapIntensity;
+					m.flatShading = source.flatShading;
+					m.blending = source.blending;
+					m.depthWrite = source.depthWrite;
+					m.depthTest = source.depthTest;
+					source.dispose();
+					registerUploadedMaterial( m );
+					return m;
+
+				}
+
+				function applyProbeMaterialsToMesh( mesh ) {
+
+					if ( Array.isArray( mesh.material ) ) {
+
+						mesh.material = mesh.material.map( ( mat ) => standardMaterialToNode( mat ) );
+
+					} else {
+
+						mesh.material = standardMaterialToNode( mesh.material );
+
+					}
+
+				}
+
+				function clearUploadedModel() {
+
+					if ( ! uploadedModel ) return;
+
+					scene.remove( uploadedModel );
+					uploadedModel.traverse( ( child ) => {
+
+						if ( child.isMesh ) {
+
+							if ( Array.isArray( child.material ) ) {
+
+								child.material.forEach( ( m ) => m.dispose() );
+
+							} else if ( child.material ) {
+
+								child.material.dispose();
+
+							}
+
+							child.geometry?.dispose();
+
+						}
+
+					} );
+					for ( const m of uploadedModelMaterials ) {
+
+						const i = probeMaterials.indexOf( m );
+						if ( i >= 0 ) probeMaterials.splice( i, 1 );
+
+					}
+
+					uploadedModelMaterials.length = 0;
+					uploadedModel = null;
+					transformControls.attach( sphere );
+					updateLightsNode();
+
+				}
+
+				const fileInput = document.createElement( 'input' );
+				fileInput.type = 'file';
+				fileInput.accept = '.glb,.gltf,model/gltf+json,model/gltf-binary';
+				fileInput.style.display = 'none';
+				document.body.appendChild( fileInput );
+				fileInput.addEventListener( 'change', ( event ) => {
+
+					const file = event.target.files[ 0 ];
+					event.target.value = '';
+					if ( ! file ) return;
+
+					clearUploadedModel();
+
+					const reader = new FileReader();
+					reader.addEventListener( 'load', ( e ) => {
+
+						const data = e.target.result;
+						gltfLoader.parse(
+							data,
+							'',
+							( gltf ) => {
+
+								const model = gltf.scene;
+								model.traverse( ( child ) => {
+
+									if ( child.isMesh ) {
+
+										child.castShadow = true;
+										child.receiveShadow = true;
+										applyProbeMaterialsToMesh( child );
+
+									}
+
+								} );
+
+								const box = new THREE.Box3().setFromObject( model );
+								const size = new THREE.Vector3();
+								box.getSize( size );
+								const maxDim = Math.max( size.x, size.y, size.z, 0.0001 );
+								const targetSize = 2;
+								model.scale.setScalar( targetSize / maxDim );
+								const box2 = new THREE.Box3().setFromObject( model );
+								model.position.set( 0, - box2.min.y, 0 );
+								model.position.add( new THREE.Vector3( - 4, 0, 0 ) );
+
+								scene.add( model );
+								uploadedModel = model;
+								transformControls.detach();
+								transformControls.attach( model );
+								updateLightsNode();
+								bakeWithResolution( params.resolution );
+
+							},
+							( err ) => console.error( 'GLTF: failed to load file', err )
+						);
+
+					} );
+					if ( file.name.toLowerCase().endsWith( '.gltf' ) ) {
+
+						reader.readAsText( file );
+
+					} else {
+
+						reader.readAsArrayBuffer( file );
+
+					}
+
+				} );
 
 				gui = new GUI();
 				gui.add( params, 'enabled' ).name( 'GI' ).onChange( () => {
@@ -318,10 +583,41 @@
 				} );
 				gui.add( params, 'showProbes' ).name( 'Show Probes' ).onChange( ( value ) => {
 
-					if ( probesHelperLeft ) probesHelperLeft.visible = value;
-					if ( probesHelperRight ) probesHelperRight.visible = value;
+					if ( probesHelperLeft ) {
+
+						probesHelperLeft.visible = value;
+						probesHelperLeft.update();
+
+					}
+
+					if ( probesHelperRight ) {
+
+						probesHelperRight.visible = value;
+						probesHelperRight.update();
+
+					}
+
+					renderer.render( scene, camera );
 
 				} );
+
+				const gltfFolder = gui.addFolder( 'GLTF' );
+				gltfFolder.add( { load: () => fileInput.click() }, 'load' ).name( 'Load glTF / GLB' );
+				gltfFolder.add( {
+					clear: () => {
+
+						clearUploadedModel();
+						renderer.render( scene, camera );
+
+					}
+				}, 'clear' ).name( 'Remove model' );
+				gltfFolder.add( {
+					rebake: () => {
+
+						bakeWithResolution( params.resolution );
+
+					}
+				}, 'rebake' ).name( 'Rebake GI' );
 
 				await bakeWithResolution( params.resolution );
 
