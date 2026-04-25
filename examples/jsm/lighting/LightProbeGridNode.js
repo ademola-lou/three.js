@@ -1,5 +1,5 @@
 import { Data3DTexture, HalfFloatType, LightingNode, LinearFilter, RGBAFormat } from 'three/webgpu';
-import { float, normalWorld, positionWorld, texture3D, uniform, vec3 } from 'three/tsl';
+import { float, normalWorld, positionWorld, smoothstep, texture3D, uniform, vec3 } from 'three/tsl';
 
 const _emptyProbeTexture = /*@__PURE__*/ new Data3DTexture( new Uint16Array( 4 ), 1, 1, 1 );
 _emptyProbeTexture.type = HalfFloatType;
@@ -9,6 +9,15 @@ _emptyProbeTexture.magFilter = LinearFilter;
 _emptyProbeTexture.generateMipmaps = false;
 _emptyProbeTexture.unpackAlignment = 1;
 _emptyProbeTexture.needsUpdate = true;
+
+const _emptyVisibilityTexture = /*@__PURE__*/ new Data3DTexture( new Uint16Array( 4 ), 1, 1, 1 );
+_emptyVisibilityTexture.type = HalfFloatType;
+_emptyVisibilityTexture.format = RGBAFormat;
+_emptyVisibilityTexture.minFilter = LinearFilter;
+_emptyVisibilityTexture.magFilter = LinearFilter;
+_emptyVisibilityTexture.generateMipmaps = false;
+_emptyVisibilityTexture.unpackAlignment = 1;
+_emptyVisibilityTexture.needsUpdate = true;
 
 function samplePackedLightProbeGridIrradiance( probes, uvw, sampleNormal ) {
 
@@ -60,6 +69,17 @@ function samplePackedLightProbeGridIrradiance( probes, uvw, sampleNormal ) {
 
 }
 
+function samplePackedLightProbeGridVisibility( probes, uvw ) {
+
+	const probesVisibility = texture3D( probes.visibilityTexture || _emptyVisibilityTexture );
+	const probesResolution = uniform( probes.resolution.clone() );
+	const atlasDepth = probesResolution.z.add( 2 );
+	const uvZ = uvw.z.mul( probesResolution.z ).add( 1 ).div( atlasDepth );
+
+	return probesVisibility.sample( vec3( uvw.x, uvw.y, uvZ ) ).rgb;
+
+}
+
 function sampleLightProbeGridIrradiance( probes, samplePosition, sampleNormal ) {
 
 	const probesMin = uniform( probes.boundingBox.min.clone() );
@@ -98,8 +118,14 @@ function sampleLightProbeGridIrradiance( probes, samplePosition, sampleNormal ) 
 	const uvw = localUVW.clamp( 0, 1 ).mul( resMinusOne ).div( probesResolution ).add( float( 0.5 ).div( probesResolution ) );
 
 	const irradiance = samplePackedLightProbeGridIrradiance( probes, uvw, sampleNormal );
+	const visibilityMoments = samplePackedLightProbeGridVisibility( probes, uvw );
+	const visibilityFar = uniform( probes.visibilityFar !== undefined ? probes.visibilityFar : 100 );
+	const visibilityStrength = uniform( probes.visibilityStrength !== undefined ? probes.visibilityStrength : 0.35 );
+	const visibilityDistance = uniform( probes.visibilityDistance !== undefined ? probes.visibilityDistance : 2.5 );
+	const meanDistance = visibilityMoments.x.mul( visibilityFar );
+	const visibility = float( 1 ).sub( visibilityStrength.mul( float( 1 ).sub( smoothstep( 0, visibilityDistance, meanDistance ) ) ) );
 
-	return inside.select( irradiance, vec3( 0 ) );
+	return inside.select( irradiance.mul( visibility ), vec3( 0 ) );
 
 }
 
@@ -128,4 +154,4 @@ class LightProbeGridNode extends LightingNode {
 
 }
 
-export { LightProbeGridNode, sampleLightProbeGridIrradiance, samplePackedLightProbeGridIrradiance };
+export { LightProbeGridNode, sampleLightProbeGridIrradiance, samplePackedLightProbeGridIrradiance, samplePackedLightProbeGridVisibility };

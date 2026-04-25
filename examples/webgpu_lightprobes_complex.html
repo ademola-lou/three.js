@@ -57,7 +57,9 @@
 			const params = {
 				enabled: true,
 				showProbes: false,
-				resolution: 4
+				resolution: 4,
+				occlusionStrength: 0.35,
+				occlusionDistance: 2.5
 			};
 
 			init();
@@ -263,6 +265,10 @@
 
 					if ( params.enabled && probesLeft && probesRight ) {
 
+						probesLeft.visibilityStrength = params.occlusionStrength;
+						probesLeft.visibilityDistance = params.occlusionDistance;
+						probesRight.visibilityStrength = params.occlusionStrength;
+						probesRight.visibilityDistance = params.occlusionDistance;
 						activeLights.push( new LightProbeGridNode( probesLeft ), new LightProbeGridNode( probesRight ) );
 
 					}
@@ -313,10 +319,14 @@
 
 					probesLeft = new LightProbeGridGPU( 7.8, 4.7, 7.6, resolution, resolution, resolution );
 					probesLeft.position.set( - 3.9, 2.45, 0 );
+					probesLeft.visibilityStrength = params.occlusionStrength;
+					probesLeft.visibilityDistance = params.occlusionDistance;
 					await probesLeft.bake( renderer, scene, { cubemapSize: 32, near: 0.05, far: 20 } );
 
 					probesRight = new LightProbeGridGPU( 7.8, 4.7, 7.6, resolution, resolution, resolution );
 					probesRight.position.set( 3.9, 2.45, 0 );
+					probesRight.visibilityStrength = params.occlusionStrength;
+					probesRight.visibilityDistance = params.occlusionDistance;
 					await probesRight.bake( renderer, scene, { cubemapSize: 32, near: 0.05, far: 20 } );
 
 					updateLightsNode();
@@ -598,6 +608,18 @@
 					}
 
 					renderer.render( scene, camera );
+
+				} );
+
+				const occlusionFolder = gui.addFolder( 'Probe Occlusion' );
+				occlusionFolder.add( params, 'occlusionStrength', 0, 1, 0.01 ).name( 'Strength' ).onChange( () => {
+
+					updateLightsNode();
+
+				} );
+				occlusionFolder.add( params, 'occlusionDistance', 0.1, 8, 0.1 ).name( 'Distance' ).onChange( () => {
+
+					updateLightsNode();
 
 				} );
 
