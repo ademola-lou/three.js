@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Babylon.js Animation Retarget Tool</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #111217;
+        color: #f4f7fb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        height: 100vh;
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 360px minmax(0, 1fr);
+        background: #111217;
+        overflow: hidden;
+      }
+
+      aside {
+        overflow: auto;
+        height: 100vh;
+        padding: 18px;
+        border-right: 1px solid #2a2d37;
+        background: #171923;
+      }
+
+      main {
+        min-width: 0;
+        position: relative;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+
+      p {
+        margin: 0 0 16px;
+        color: #aab2c5;
+        line-height: 1.45;
+      }
+
+      aside fieldset {
+        margin: 0 0 16px;
+        padding: 14px;
+        border: 1px solid #303440;
+        border-radius: 12px;
+        background: #1d202b;
+      }
+
+      aside legend {
+        padding: 0 6px;
+        color: #dce5ff;
+        font-weight: 700;
+      }
+
+      aside label {
+        display: block;
+        margin: 10px 0 6px;
+        color: #cfd8ec;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      aside input,
+      aside select,
+      aside textarea {
+        width: 100%;
+        min-height: 36px;
+        border: 1px solid #3a4052;
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: #10131c;
+        color: #f4f7fb;
+      }
+
+      aside textarea {
+        min-height: 150px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      aside input[type="checkbox"] {
+        width: auto;
+        min-height: auto;
+        margin-right: 8px;
+      }
+
+      .checkbox {
+        display: flex;
+        align-items: center;
+        margin: 10px 0 0;
+        color: #cfd8ec;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      aside button {
+        width: 100%;
+        min-height: 40px;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 12px;
+        background: #5b7cfa;
+        color: #fff;
+        font-weight: 750;
+        cursor: pointer;
+      }
+
+      aside button.secondary {
+        background: #293044;
+      }
+
+      aside button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .hint {
+        margin-top: 8px;
+        color: #8892aa;
+        font-size: 12px;
+      }
+
+      .inline-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      #renderCanvas {
+        width: 100%;
+        height: 100vh;
+        display: block;
+        outline: none;
+        touch-action: none;
+      }
+
+      #status {
+        min-height: 52px;
+        margin-top: 14px;
+        padding: 12px;
+        border: 1px solid #303440;
+        border-radius: 10px;
+        background: #10131c;
+        color: #cad3e8;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <h1>Animation Retarget Tool</h1>
+      <p>
+        Load a target avatar and a source model containing animation groups, then retarget the
+        selected animation onto the avatar.
+      </p>
+
+      <fieldset>
+        <legend>Target Model</legend>
+        <label for="targetFile">Target GLB/GLTF file</label>
+        <input id="targetFile" type="file" accept=".glb,.gltf,.babylon" />
+
+        <label for="targetUrl">or target URL</label>
+        <input
+          id="targetUrl"
+          type="text"
+          value="https://assets.babylonjs.com/mixamo/Characters/Ch14_nonPBR.glb"
+        />
+      </fieldset>
+
+      <fieldset>
+        <legend>Source Animation Model</legend>
+        <label for="sourceFile">Source animation GLB/GLTF file</label>
+        <input id="sourceFile" type="file" accept=".glb,.gltf,.babylon" />
+
+        <label for="sourceUrl">or source animation URL</label>
+        <input
+          id="sourceUrl"
+          type="text"
+          value="https://assets.babylonjs.com/mixamo/Animations/Hip Hop Dancing.glb"
+        />
+
+        <label for="animationGroup">Animation group</label>
+        <select id="animationGroup" disabled>
+          <option value="">Load models first</option>
+        </select>
+      </fieldset>
+
+      <fieldset>
+        <legend>Retarget Options</legend>
+        <label for="outputName">Output file name</label>
+        <input id="outputName" type="text" value="retargeted_avatar_animation" />
+
+        <label for="rootNodeName">Root node name</label>
+        <input id="rootNodeName" type="text" placeholder="optional, example: mixamorig:Hips" />
+
+        <label for="groundReferenceNodeName">Ground reference node name</label>
+        <input id="groundReferenceNodeName" type="text" value="mixamorig:LeftToe_End" />
+
+        <label for="groundReferenceVerticalAxis">Ground reference vertical axis</label>
+        <input id="groundReferenceVerticalAxis" type="text" placeholder="optional, example: y" />
+
+        <label class="checkbox">
+          <input id="retargetAllAnimations" type="checkbox" />
+          Retarget all source animations
+        </label>
+        <label class="checkbox">
+          <input id="clearExistingTargetAnimations" type="checkbox" />
+          Clear existing target animations on load
+        </label>
+        <label class="checkbox">
+          <input id="fixAnimations" type="checkbox" />
+          Fix animations
+        </label>
+        <label class="checkbox">
+          <input id="checkHierarchy" type="checkbox" />
+          Check hierarchy
+        </label>
+        <label class="checkbox">
+          <input id="retargetAnimationKeys" type="checkbox" checked />
+          Retarget animation keys
+        </label>
+        <label class="checkbox">
+          <input id="fixRootPosition" type="checkbox" checked />
+          Fix root position
+        </label>
+        <label class="checkbox">
+          <input id="fixGroundReference" type="checkbox" />
+          Fix ground reference
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>AI Node Mapping</legend>
+        <label for="aiProvider">AI provider</label>
+        <select id="aiProvider">
+          <option value="groq" selected>Groq API</option>
+          <option value="webllm">WebLLM local</option>
+        </select>
+
+        <label for="groqApiKey">Groq API key</label>
+        <input id="groqApiKey" type="password" autocomplete="off" placeholder="gsk_..." />
+
+        <label for="groqModel">Groq model</label>
+        <input id="groqModel" type="text" value="llama-3.1-8b-instant" />
+
+        <div class="inline-actions">
+          <button id="saveGroqKeyButton" class="secondary" type="button">Save Groq Key</button>
+          <button id="clearGroqKeyButton" class="secondary" type="button">Clear Groq Key</button>
+        </div>
+
+        <label for="webLlmModel">WebLLM model</label>
+        <input id="webLlmModel" type="text" value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" />
+
+        <label class="checkbox">
+          <input id="reuseWebLlmModel" type="checkbox" checked />
+          Reuse loaded model
+        </label>
+
+        <label for="mapNodeNamesJson">mapNodeNames JSON</label>
+        <textarea
+          id="mapNodeNamesJson"
+          spellcheck="false"
+          placeholder='[["mixamorig:Hips", "Hips"], ["mixamorig:LeftFoot", "LeftFoot"]]'
+        ></textarea>
+
+        <div class="inline-actions">
+          <button id="autoMapButton" class="secondary" type="button" disabled>Auto Map</button>
+          <button id="clearMapButton" class="secondary" type="button">Clear Map</button>
+        </div>
+
+        <div class="hint">
+          Groq is faster but uses an API key stored in this browser. WebLLM runs locally with
+          WebGPU.
+        </div>
+      </fieldset>
+
+      <div class="stack">
+        <button id="loadButton" type="button">Load Models</button>
+        <button id="retargetButton" type="button" disabled>Retarget Animation</button>
+        <button id="downloadButton" type="button" disabled>Download Retargeted GLB</button>
+        <button id="inspectorButton" class="secondary" type="button">Toggle Inspector</button>
+      </div>
+
+      <div class="hint">
+        The Babylon Inspector is shown after load. Use this page's download button for a GLB with
+        the target model and retargeted animation.
+      </div>
+      <div id="status">Ready.</div>
+    </aside>
+
+    <main>
+      <canvas id="renderCanvas"></canvas>
+    </main>
+
+    <script src="https://preview.babylonjs.com/babylon.js"></script>
+    <script src="https://preview.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="https://preview.babylonjs.com/serializers/babylonjs.serializers.min.js"></script>
+    <!-- <script src="https://preview.babylonjs.com/inspector/babylon.inspector.bundle.js"></script> -->
+    <script src="https://cdn.babylonjs.com/inspector/babylon.inspector.bundle.js"></script>
+
+    <script>
+      const canvas = document.getElementById("renderCanvas");
+      const statusEl = document.getElementById("status");
+      const targetFileInput = document.getElementById("targetFile");
+      const targetUrlInput = document.getElementById("targetUrl");
+      const sourceFileInput = document.getElementById("sourceFile");
+      const sourceUrlInput = document.getElementById("sourceUrl");
+      const animationGroupSelect = document.getElementById("animationGroup");
+      const loadButton = document.getElementById("loadButton");
+      const retargetButton = document.getElementById("retargetButton");
+      const downloadButton = document.getElementById("downloadButton");
+      const inspectorButton = document.getElementById("inspectorButton");
+      const autoMapButton = document.getElementById("autoMapButton");
+      const clearMapButton = document.getElementById("clearMapButton");
+      const mapNodeNamesJson = document.getElementById("mapNodeNamesJson");
+      const aiProviderSelect = document.getElementById("aiProvider");
+      const groqApiKeyInput = document.getElementById("groqApiKey");
+      const saveGroqKeyButton = document.getElementById("saveGroqKeyButton");
+      const clearGroqKeyButton = document.getElementById("clearGroqKeyButton");
+      const groqApiKeyStorageKey = "autoRetarget.groqApiKey";
+
+      const engine = new BABYLON.Engine(canvas, true, {
+        preserveDrawingBuffer: true,
+        stencil: true,
+      });
+
+      let scene = null;
+      let targetRootNode = null;
+      let sourceRootNode = null;
+      let targetAnimationGroups = [];
+      let targetSkeletons = [];
+      let sourceAnimationGroups = [];
+      let retargetedAnimationGroups = [];
+      let webLlmEngine = null;
+      let webLlmModelId = "";
+
+      const setStatus = (message) => {
+        statusEl.textContent = message;
+      };
+
+      groqApiKeyInput.value = localStorage.getItem(groqApiKeyStorageKey) ?? "";
+
+      const saveGroqApiKey = () => {
+        const apiKey = groqApiKeyInput.value.trim();
+
+        if (!apiKey) {
+          localStorage.removeItem(groqApiKeyStorageKey);
+          setStatus("Cleared stored Groq API key.");
+          return;
+        }
+
+        localStorage.setItem(groqApiKeyStorageKey, apiKey);
+        setStatus("Saved Groq API key in this browser.");
+      };
+
+      const setBusy = (busy) => {
+        loadButton.disabled = busy;
+        retargetButton.disabled = busy || !targetRootNode || sourceAnimationGroups.length === 0;
+        downloadButton.disabled = busy || retargetedAnimationGroups.length === 0;
+        autoMapButton.disabled = busy || !targetRootNode || sourceAnimationGroups.length === 0;
+      };
+
+      const getAssetInput = (fileInput, urlInput) => {
+        const file = fileInput.files?.[0];
+        if (file) {
+          return file;
+        }
+
+        const url = urlInput.value.trim();
+        if (!url) {
+          throw new Error("Provide a file or URL for both the target and source animation.");
+        }
+
+        return url;
+      };
+
+      const createScene = () => {
+        scene?.dispose();
+
+        const nextScene = new BABYLON.Scene(engine);
+        nextScene.clearColor = new BABYLON.Color4(0.06, 0.07, 0.1, 1);
+        nextScene.createDefaultEnvironment({
+          createGround: true,
+          groundSize: 8,
+          skyboxSize: 32,
+        });
+
+        const camera = new BABYLON.ArcRotateCamera(
+          "camera",
+          Math.PI,
+          Math.PI / 2.35,
+          4,
+          BABYLON.Vector3.Zero(),
+          nextScene,
+        );
+        camera.attachControl(canvas, true);
+        camera.wheelPrecision = 45;
+        nextScene.activeCamera = camera;
+
+        new BABYLON.HemisphericLight("hemisphericLight", new BABYLON.Vector3(0, 1, 0), nextScene);
+
+        return nextScene;
+      };
+
+      const rootFromImport = (result, fallbackName) => {
+        const root =
+          result.meshes.find((mesh) => mesh.name === "__root__") ??
+          result.meshes.find((mesh) => !mesh.parent) ??
+          result.transformNodes.find((node) => !node.parent);
+
+        if (!root) {
+          throw new Error(`Could not find a root node for ${fallbackName}.`);
+        }
+
+        root.name = fallbackName;
+        return root;
+      };
+
+      const refreshAnimationGroupSelect = () => {
+        animationGroupSelect.innerHTML = "";
+
+        if (sourceAnimationGroups.length === 0) {
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "No animation groups found";
+          animationGroupSelect.append(option);
+          animationGroupSelect.disabled = true;
+          return;
+        }
+
+        for (const group of sourceAnimationGroups) {
+          const option = document.createElement("option");
+          option.value = group.uniqueId.toString();
+          option.textContent = group.name || `AnimationGroup ${group.uniqueId}`;
+          animationGroupSelect.append(option);
+        }
+
+        animationGroupSelect.disabled = false;
+      };
+
+      const getSelectedSourceAnimationGroup = () =>
+        sourceAnimationGroups.find((group) => group.uniqueId.toString() === animationGroupSelect.value) ??
+        sourceAnimationGroups[0];
+
+      const getSourceAnimationGroupsToRetarget = () =>
+        document.getElementById("retargetAllAnimations").checked
+          ? sourceAnimationGroups
+          : [getSelectedSourceAnimationGroup()].filter(Boolean);
+
+      const disposeRetargetedAnimationGroups = () => {
+        for (const group of retargetedAnimationGroups) {
+          group.dispose();
+        }
+
+        retargetedAnimationGroups = [];
+      };
+
+      const getTargetExportNodeSet = () =>
+        new Set([targetRootNode, ...(targetRootNode?.getDescendants?.(false) ?? [])].filter(Boolean));
+
+      const getExportAnimationSet = () => {
+        const animationGroups = [...targetAnimationGroups, ...retargetedAnimationGroups];
+        const animations = new Set();
+
+        for (const group of animationGroups) {
+          for (const targetedAnimation of group.targetedAnimations) {
+            animations.add(targetedAnimation.animation);
+          }
+        }
+
+        return animations;
+      };
+
+      const uniqueSorted = (values) =>
+        [...new Set(values.filter((value) => typeof value === "string" && value.trim()))].sort(
+          (left, right) => left.localeCompare(right),
+        );
+
+      const getSourceAnimatedNodeNames = (sourceGroup) =>
+        uniqueSorted(sourceGroup.targetedAnimations.map((targetedAnimation) => targetedAnimation.target?.name));
+
+      const getTargetBoneAndNodeNames = () => {
+        const names = [];
+
+        for (const skeleton of targetSkeletons) {
+          for (const bone of skeleton.bones) {
+            names.push(bone.name);
+            names.push(bone.getTransformNode?.()?.name);
+          }
+        }
+
+        const targetDescendants = targetRootNode?.getDescendants?.(false) ?? [];
+        for (const node of [targetRootNode, ...targetDescendants]) {
+          names.push(node?.name);
+        }
+
+        return uniqueSorted(names);
+      };
+
+      const normalizeMapNodeNames = (value) => {
+        if (Array.isArray(value)) {
+          return value
+            .filter(
+              (entry) =>
+                Array.isArray(entry) &&
+                entry.length >= 2 &&
+                typeof entry[0] === "string" &&
+                typeof entry[1] === "string",
+            )
+            .map(([sourceName, targetName]) => [sourceName.trim(), targetName.trim()])
+            .filter(([sourceName, targetName]) => sourceName && targetName);
+        }
+
+        if (value && typeof value === "object") {
+          return Object.entries(value)
+            .filter(([, targetName]) => typeof targetName === "string")
+            .map(([sourceName, targetName]) => [sourceName.trim(), targetName.trim()])
+            .filter(([sourceName, targetName]) => sourceName && targetName);
+        }
+
+        return [];
+      };
+
+      const parseMapNodeNames = () => {
+        const rawMapping = mapNodeNamesJson.value.trim();
+        if (!rawMapping) {
+          return new Map();
+        }
+
+        const mappingPairs = normalizeMapNodeNames(JSON.parse(rawMapping));
+        return new Map(mappingPairs);
+      };
+
+      const buildMappingPrompt = (sourceNames, targetNames) =>
+        [
+          "Create a Babylon.js animation retarget mapNodeNames mapping.",
+          "Return only a valid JSON object where each key is a sourceName and each value is a targetName.",
+          "Every sourceName must come from SOURCE_ANIMATION_TARGET_NAMES.",
+          "Every targetName must come from TARGET_BONE_OR_NODE_NAMES.",
+          "Omit uncertain mappings instead of inventing names.",
+          "Prefer humanoid skeletal meaning over exact string similarity.",
+          "Handle common prefixes and naming schemes such as mixamorig, Mixamo, VRM, Ready Player Me, UE, and Blender rigs.",
+          "",
+          `SOURCE_ANIMATION_TARGET_NAMES:\n${JSON.stringify(sourceNames, null, 2)}`,
+          "",
+          `TARGET_BONE_OR_NODE_NAMES:\n${JSON.stringify(targetNames, null, 2)}`,
+        ].join("\n");
+
+      const parseModelJsonText = (text) => {
+        const trimmed = text.trim();
+
+        try {
+          return JSON.parse(trimmed);
+        } catch {
+          const jsonMatch =
+            trimmed.match(/```(?:json)?\s*([\s\S]*?)```/) ??
+            trimmed.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+
+          if (!jsonMatch) {
+            throw new Error("The model did not return JSON.");
+          }
+
+          return JSON.parse(jsonMatch[1]);
+        }
+      };
+
+      const getWebLlmEngine = async () => {
+        if (!navigator.gpu) {
+          throw new Error("WebLLM requires a WebGPU-capable browser. Use recent Chrome or Edge.");
+        }
+
+        const selectedModel = document.getElementById("webLlmModel").value.trim();
+        const shouldReuseModel = document.getElementById("reuseWebLlmModel").checked;
+
+        if (!selectedModel) {
+          throw new Error("Add a WebLLM model id.");
+        }
+
+        if (webLlmEngine && webLlmModelId === selectedModel && shouldReuseModel) {
+          return webLlmEngine;
+        }
+
+        const webllm = await import("https://esm.run/@mlc-ai/web-llm");
+
+        setStatus(`Loading WebLLM model "${selectedModel}"...`);
+        webLlmEngine = await webllm.CreateMLCEngine(selectedModel, {
+          initProgressCallback: (progress) => {
+            setStatus(`Loading WebLLM model "${selectedModel}"...\n${progress.text ?? ""}`);
+          },
+        });
+        webLlmModelId = selectedModel;
+
+        return webLlmEngine;
+      };
+
+      const requestWebLlmMapping = async (prompt) => {
+        const engine = await getWebLlmEngine();
+        const response = await engine.chat.completions.create({
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a precise animation rig retargeting assistant. Reply only with valid JSON.",
+            },
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          temperature: 0.1,
+        });
+
+        return response.choices?.[0]?.message?.content ?? "";
+      };
+
+      const requestGroqMapping = async (prompt) => {
+        const apiKey = groqApiKeyInput.value.trim();
+        const model = document.getElementById("groqModel").value.trim();
+
+        if (!apiKey) {
+          throw new Error("Add a Groq API key or select WebLLM local.");
+        }
+
+        if (!model) {
+          throw new Error("Add a Groq model name.");
+        }
+
+        localStorage.setItem(groqApiKeyStorageKey, apiKey);
+
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are a precise animation rig retargeting assistant. Reply only with valid JSON.",
+              },
+              {
+                role: "user",
+                content: prompt,
+              },
+            ],
+            temperature: 0.1,
+            response_format: { type: "json_object" },
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Groq request failed (${response.status}): ${errorText}`);
+        }
+
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content ?? "";
+      };
+
+      const autoMapWithAi = async () => {
+        if (!targetRootNode || sourceAnimationGroups.length === 0) {
+          setStatus("Load a target model and source animation before auto mapping.");
+          return;
+        }
+
+        const sourceNames = uniqueSorted(
+          getSourceAnimationGroupsToRetarget().flatMap((group) => getSourceAnimatedNodeNames(group)),
+        );
+        const targetNames = getTargetBoneAndNodeNames();
+
+        if (sourceNames.length === 0 || targetNames.length === 0) {
+          setStatus("Could not find enough source or target node names to map.");
+          return;
+        }
+
+        setBusy(true);
+        const providerName = aiProviderSelect.value === "groq" ? "Groq" : "WebLLM";
+        setStatus(
+          `Asking ${providerName} to map ${sourceNames.length} source nodes to ${targetNames.length} target bones/nodes...`,
+        );
+
+        try {
+          const prompt = buildMappingPrompt(sourceNames, targetNames);
+          const text =
+            aiProviderSelect.value === "groq"
+              ? await requestGroqMapping(prompt)
+              : await requestWebLlmMapping(prompt);
+          const mappingPairs = normalizeMapNodeNames(parseModelJsonText(text));
+
+          if (mappingPairs.length === 0) {
+            throw new Error(`${providerName} returned no usable mappings.`);
+          }
+
+          mapNodeNamesJson.value = JSON.stringify(mappingPairs, null, 2);
+          setStatus(`Generated ${mappingPairs.length} mapNodeNames pair(s). Review, then retarget.`);
+        } catch (error) {
+          console.error(error);
+          setStatus(`${providerName} mapping error: ${error.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const loadModels = async () => {
+        setBusy(true);
+        setStatus("Loading target and source animation...");
+
+        try {
+          if (!BABYLON.AnimatorAvatar) {
+            throw new Error("AnimatorAvatar is unavailable. Use a Babylon.js v9/preview build.");
+          }
+
+          scene = createScene();
+          targetRootNode = null;
+          sourceRootNode = null;
+          targetAnimationGroups = [];
+          targetSkeletons = [];
+          sourceAnimationGroups = [];
+          retargetedAnimationGroups = [];
+          mapNodeNamesJson.value = "";
+
+          const targetInput = getAssetInput(targetFileInput, targetUrlInput);
+          const sourceInput = getAssetInput(sourceFileInput, sourceUrlInput);
+
+          const targetResult = await BABYLON.ImportMeshAsync(targetInput, scene);
+          targetRootNode = rootFromImport(targetResult, "target");
+          targetAnimationGroups = [...scene.animationGroups];
+          targetSkeletons = [...scene.skeletons];
+
+          const animationCountBeforeSource = scene.animationGroups.length;
+          const sourceResult = await BABYLON.ImportMeshAsync(sourceInput, scene);
+          sourceRootNode = rootFromImport(sourceResult, "source");
+          sourceRootNode.setEnabled(false);
+          sourceAnimationGroups = scene.animationGroups.slice(animationCountBeforeSource);
+
+          scene.stopAllAnimations();
+          if (document.getElementById("clearExistingTargetAnimations").checked) {
+            targetAnimationGroups.forEach((group) => group.dispose());
+            targetAnimationGroups = [];
+          }
+
+          refreshAnimationGroupSelect();
+          retargetButton.disabled = sourceAnimationGroups.length === 0;
+          downloadButton.disabled = true;
+
+          scene.debugLayer.show({
+            embedMode: true,
+            overlay: false,
+            showExplorer: true,
+            showInspector: true,
+          });
+
+          setStatus(
+            `Loaded target and ${sourceAnimationGroups.length} source animation group(s).\nSelect an animation group, then retarget.`,
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`Error: ${error.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const retargetAnimation = () => {
+        if (!scene || !targetRootNode || sourceAnimationGroups.length === 0) {
+          setStatus("Load a target model and source animation first.");
+          return;
+        }
+
+        setBusy(true);
+
+        try {
+          disposeRetargetedAnimationGroups();
+
+          const selectedGroups = getSourceAnimationGroupsToRetarget();
+          const mapNodeNames = parseMapNodeNames();
+          const avatar = new BABYLON.AnimatorAvatar("targetAvatar", targetRootNode, false);
+
+          for (const [index, sourceGroup] of selectedGroups.entries()) {
+            const groupName = sourceGroup.name || `animation_${index + 1}`;
+            const retargetOptions = {
+              animationGroupName: groupName,
+              fixAnimations: document.getElementById("fixAnimations").checked,
+              checkHierarchy: document.getElementById("checkHierarchy").checked,
+              retargetAnimationKeys: document.getElementById("retargetAnimationKeys").checked,
+              fixRootPosition: document.getElementById("fixRootPosition").checked,
+              fixGroundReference: document.getElementById("fixGroundReference").checked,
+              rootNodeName: document.getElementById("rootNodeName").value.trim(),
+              groundReferenceNodeName: document.getElementById("groundReferenceNodeName").value.trim(),
+              groundReferenceVerticalAxis: document
+                .getElementById("groundReferenceVerticalAxis")
+                .value.trim(),
+            };
+
+            if (mapNodeNames.size > 0) {
+              retargetOptions.mapNodeNames = mapNodeNames;
+            }
+
+            retargetedAnimationGroups.push(avatar.retargetAnimationGroup(sourceGroup, retargetOptions));
+          }
+
+          avatar.dispose();
+          scene.stopAllAnimations();
+          retargetedAnimationGroups[0]?.start(true);
+
+          downloadButton.disabled = false;
+          const targetedAnimationCount = retargetedAnimationGroups.reduce(
+            (count, group) => count + group.targetedAnimations.length,
+            0,
+          );
+          setStatus(
+            `Retargeted ${retargetedAnimationGroups.length} animation group(s).\nTargeted animations: ${targetedAnimationCount}\nmapNodeNames pairs: ${mapNodeNames.size}`,
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`Retarget error: ${error.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const downloadRetargetedGlb = async () => {
+        if (!scene || retargetedAnimationGroups.length === 0) {
+          setStatus("Retarget an animation before downloading.");
+          return;
+        }
+
+        setBusy(true);
+        setStatus("Exporting retargeted GLB...");
+
+        try {
+          const fileName =
+            document.getElementById("outputName").value.trim() || "retargeted_avatar_animation";
+          const targetExportNodes = getTargetExportNodeSet();
+          const exportAnimations = getExportAnimationSet();
+
+          const glb = await BABYLON.GLTF2Export.GLBAsync(scene, fileName, {
+            shouldExportNode: (node) => targetExportNodes.has(node),
+            shouldExportAnimation: (animation) => exportAnimations.has(animation),
+          });
+
+          glb.downloadFiles();
+          setStatus(
+            `Downloaded ${fileName}.glb\nExported target model with ${retargetedAnimationGroups.length} retargeted animation group(s).`,
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`Export error: ${error.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      loadButton.addEventListener("click", loadModels);
+      retargetButton.addEventListener("click", retargetAnimation);
+      downloadButton.addEventListener("click", downloadRetargetedGlb);
+      autoMapButton.addEventListener("click", autoMapWithAi);
+      saveGroqKeyButton.addEventListener("click", saveGroqApiKey);
+      clearGroqKeyButton.addEventListener("click", () => {
+        groqApiKeyInput.value = "";
+        localStorage.removeItem(groqApiKeyStorageKey);
+        setStatus("Cleared stored Groq API key.");
+      });
+      clearMapButton.addEventListener("click", () => {
+        mapNodeNamesJson.value = "";
+        setStatus("Cleared mapNodeNames.");
+      });
+      inspectorButton.addEventListener("click", () => {
+        if (!scene) {
+          return;
+        }
+
+        if (scene.debugLayer.isVisible()) {
+          scene.debugLayer.hide();
+        } else {
+          scene.debugLayer.show({
+            embedMode: true,
+            overlay: false,
+            showExplorer: true,
+            showInspector: true,
+          });
+        }
+      });
+
+      engine.runRenderLoop(() => {
+        scene?.render();
+      });
+
+      window.addEventListener("resize", () => {
+        engine.resize();
+      });
+
+      scene = createScene();
+    </script>
+  </body>
+</html>
